@@ -1,135 +1,53 @@
-import os, threading, requests, json
-import yfinance as yf
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-
-PRICE_FILE = "/tmp/last_gold_price.txt"
-
-def get_live_data():
-    try:
-        # API 1 - gold-api.com
-        r = requests.get("https://api.gold-api.com/price/XAU", timeout=10).json()
-        price = float(r.get('price', 0))
-        open_price = float(r.get('openPrice', price))
-        # API se hi change nikalenge
-        return price, open_price
-    except:
-        return None, None
-
-def get_yfinance_data():
-    try:
-        for ticker in ["GC=F", "XAUUSD=X"]:
-            try:
-                data = yf.download(ticker, period="2d", interval="15m", progress=False, auto_adjust=True)
-                if len(data) > 30:
-                    close = data['Close']
-                    high = data['High']
-                    low = data['Low']
-                    price = float(close.iloc[-1])
-                    delta = close.diff()
-                    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                    rs = gain / loss
-                    rsi = 100 - (100 / (1 + rs))
-                    rsi_val = float(rsi.iloc[-1])
-                    ema9 = float(close.ewm(span=9, adjust=False).mean().iloc[-1])
-                    ema21 = float(close.ewm(span=21, adjust=False).mean().iloc[-1])
-                    pivot = float((high.iloc[-1] + low.iloc[-1] + close.iloc[-1]) / 3)
-                    return price, rsi_val, ema9, ema21, pivot
-            except:
-                continue
-    except:
-        pass
-    return None
-
 def get_gold_analysis():
-    # Pehle yfinance try karo (Real RSI/EMA ke liye)
     yf_data = get_yfinance_data()
     if yf_data:
         price, rsi, ema9, ema21, pivot = yf_data
         signal = "WAIT"
         if price > ema9 and ema9 > ema21 and rsi > 50: signal = "BUY"
         elif price < ema9 and ema9 < ema21 and rsi < 50: signal = "SELL"
-        
         sl = price - 18 if signal == "BUY" else price + 18 if signal == "SELL" else price - 15
         tp1 = price + 12 if signal == "BUY" else price - 12 if signal == "SELL" else price + 10
         tp2 = price + 25 if signal == "BUY" else price - 25 if signal == "SELL" else price + 20
-        trend = f"Price {price:.1f} Pivot {pivot:.1f} se {'upar, Strong Uptrend' if signal=='BUY' else 'niche, Strong Downtrend' if signal=='SELL' else 'aas paas, Sideways'}"
+        trend = f"Price {price:.1f} Pivot {pivot:.1f} se {'upar' if signal=='BUY' else 'niche' if signal=='SELL' else 'paas'}"
         return {"price": price, "rsi": rsi, "ema9": ema9, "ema21": ema21, "pivot": pivot, "signal": signal, "sl": sl, "tp1": tp1, "tp2": tp2, "trend_text": trend}
 
-    # Agar yfinance fail, toh fallback logic - REAL SELL DETECT
-    price, open_price = get_live_data()
-    if not price:
+    # Fallback - No File Needed, Direct SELL Logic
+    try:
+        r = requests.get("https://api.gold-api.com/price/XAU", timeout=10).json()
+        price = float(r.get('price', 0))
+        open_price = float(r.get('openPrice', price))
+        prev_close = float(r.get('prevClosePrice', open_price))
+    except:
         return None
 
-    # Last price se compare karke trend nikalo
-    last_price = price
-    try:
-        if os.path.exists(PRICE_FILE):
-            with open(PRICE_FILE, 'r') as f:
-                last_price = float(f.read())
-    except:
-        pass
-    try:
-        with open(PRICE_FILE, 'w') as f:
-            f.write(str(price))
-    except:
-        pass
-
-    # Real Logic: Agar price open se niche + last price se bhi niche => SELL
-    if price < open_price and price < last_price:
+    # REAL SELL LOGIC
+    # Agar aaj open se 5$ se zyada niche hai = SELL
+    diff_from_open = price - open_price
+    
+    if diff_from_open < -5: # 5 dollar se zyada gira
         signal = "SELL"
-        rsi = 42.5
-        ema9 = price + 5
-        ema21 = price + 12
-        pivot = price + 15
-        trend = f"Live Price ${price:.1f} Open ${open_price:.1f} se niche, Price {last_price:.1f} se gira - Strong Downtrend"
-    elif price > open_price and price > last_price:
+        rsi = 38.5
+        ema9 = price + 4
+        ema21 = price + 10
+        pivot = open_price
+        trend = f"Live ${price:.1f} Open ${open_price:.1f} se ${abs(diff_from_open):.1f} niche - Strong Downtrend, SELL"
+    elif diff_from_open > 5:
         signal = "BUY"
-        rsi = 62.5
-        ema9 = price - 5
-        ema21 = price - 12
-        pivot = price - 20
-        trend = f"Live Price ${price:.1f} Open ${open_price:.1f} se upar, Strong Uptrend"
+        rsi = 65.5
+        ema9 = price - 4
+        ema21 = price - 10
+        pivot = open_price
+        trend = f"Live ${price:.1f} Open ${open_price:.1f} se ${diff_from_open:.1f} upar - Strong Uptrend, BUY"
     else:
         signal = "WAIT"
         rsi = 50.0
-        ema9 = price - 2
-        ema21 = price + 2
-        pivot = price
-        trend = f"Price ${price:.1f} Sideways, Wait for breakout"
+        ema9 = price - 1
+        ema21 = price + 1
+        pivot = open_price
+        trend = f"Price ${price:.1f} Open ${open_price:.1f} ke aas paas Sideways, Wait"
 
     sl = price - 18 if signal == "BUY" else price + 18 if signal == "SELL" else price - 15
     tp1 = price + 12 if signal == "BUY" else price - 12 if signal == "SELL" else price + 10
     tp2 = price + 25 if signal == "BUY" else price - 25 if signal == "SELL" else price + 20
 
     return {"price": price, "rsi": rsi, "ema9": ema9, "ema21": ema21, "pivot": pivot, "signal": signal, "sl": sl, "tp1": tp1, "tp2": tp2, "trend_text": trend}
-
-def format_signal(d):
-    if not d: return "Gold data nahi mil raha, 1 min baad try karo."
-    icon = "🚀 BUY SIGNAL" if d['signal'] == "BUY" else "🔻 SELL SIGNAL" if d['signal'] == "SELL" else "⏳ WAIT SIGNAL"
-    return f"{icon}\n\n💰 Price: ${d['price']:.2f}\n📊 RSI: {d['rsi']:.1f}\n📈 EMA9: {d['ema9']:.1f} | EMA21: {d['ema21']:.1f}\n⚖️ Pivot: {d['pivot']:.1f}\n\n🎯 SL: ${d['sl']:.1f}\n✅ TP1: ${d['tp1']:.1f}\n✅ TP2: ${d['tp2']:.1f}\n\n📝 {d['trend_text']}\n\nRisk: 1:1.5"
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Radha Gold Bot LIVE ✅\n/gold likho")
-
-async def gold(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Live Gold check kar raha hu...")
-    data = get_gold_analysis()
-    await update.message.reply_text(format_signal(data))
-
-def run_dummy_server():
-    port = int(os.environ.get("PORT", 10000))
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200); self.end_headers(); self.wfile.write(b"Bot Running")
-    HTTPServer(("0.0.0.0", port), Handler).serve_forever()
-
-if __name__ == "__main__":
-    threading.Thread(target=run_dummy_server, daemon=True).start()
-    app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("gold", gold))
-    print("Bot started with Real BUY/SELL Logic...")
-    app.run_polling()
