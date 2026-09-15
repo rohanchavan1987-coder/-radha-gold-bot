@@ -1,66 +1,93 @@
-import os, threading, requests
+import os, threading, requests, yfinance as yf
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-def get_live_data():
+def get_analysis():
+    price = None
+    high = low = open_p = None
+    # 1. Real data yfinance se
     try:
-        r = requests.get("https://api.gold-api.com/price/XAU", timeout=10).json()
-        price = float(r['price'])
-        open_price = float(r.get('openPrice', r.get('prevClosePrice', price)))
-        high = float(r.get('highPrice', price))
-        low = float(r.get('lowPrice', price))
-        return price, open_price, high, low
+        df = yf.download("GC=F", period="1d", interval="15m", progress=False, auto_adjust=True)
+        if len(df) > 5:
+            price = float(df['Close'].iloc[-1])
+            high = float(df['High'].max())
+            low = float(df['Low'].min())
+            open_p = float(df['Open'].iloc[0])
+            close = df['Close']
+            ema9 = float(close.ewm(span=9).mean().iloc[-1])
+            ema21 = float(close.ewm(span=21).mean().iloc[-1])
+            # RSI
+            delta = close.diff()
+            gain = delta.where(delta>0,0).rolling(14).mean()
+            loss = -delta.where(delta<0,0).rolling(14).mean()
+            rs = gain/loss
+            rsi = float(100 - (100/(1+rs.iloc[-1])))
     except:
-        return None, None, None, None
+        pass
 
-def get_gold_analysis():
-    price, open_p, high, low = get_live_data()
-    if not price:
-        return None
+    # 2. Fallback API agar yfinance fail
+    if price is None:
+        try:
+            r = requests.get("https://api.gold-api.com/price/XAU", timeout=10).json()
+            price = float(r['price'])
+            open_p = float(r.get('openPrice', price))
+            high = float(r.get('highPrice', price+10))
+            low = float(r.get('lowPrice', price-10))
+            ema9 = price - 1
+            ema21 = price + 1
+            rsi = 50.0
+        except:
+            return None
 
-    # Dynamic Logic - Roz auto adjust
-    # Pivot = (High+Low+Open)/3
-    pivot = (high + low + open_p) / 3 if high and low else open_p
-    
-    # Agar Price Pivot se 3$ neeche = SELL, 3$ upar = BUY
-    if price < pivot - 3:
+    pivot = (high + low + open_p) / 3
+    # Trend logic - EMA + Pivot
+    if price < ema9 and ema9 < ema21:
         signal = "SELL"
-        rsi = 36.0
-        trend = f"Price ${price:.1f} Pivot ${pivot:.1f} se niche - Downtrend SELL"
         sl = price + 15
         tp1 = price - 12
-        tp2 = price - 25
-    elif price > pivot + 3:
+        tp2 = price - 26
+        trend = f"EMA9 {ema9:.1f} < EMA21 {ema21:.1f} + Price Pivot {pivot:.1f} se niche - Strong SELL"
+    elif price > ema9 and ema9 > ema21:
         signal = "BUY"
-        rsi = 62.0
-        trend = f"Price ${price:.1f} Pivot ${pivot:.1f} se upar - Uptrend BUY"
         sl = price - 15
         tp1 = price + 12
-        tp2 = price + 25
+        tp2 = price + 26
+        trend = f"EMA9 {ema9:.1f} > EMA21 {ema21:.1f} + Price Pivot {pivot:.1f} se upar - Strong BUY"
     else:
-        signal = "WAIT"
-        rsi = 51.0
-        trend = f"Price ${price:.1f} Pivot ${pivot:.1f} ke paas Sideways"
-        sl = price - 12
-        tp1 = price + 10
-        tp2 = price + 18
+        # Pivot se decision
+        if price < pivot - 2:
+            signal = "SELL"
+            sl = price + 14
+            tp1 = price - 10
+            tp2 = price - 22
+            trend = f"Price ${price:.1f} Pivot ${pivot:.1f} se niche - SELL"
+        elif price > pivot + 2:
+            signal = "BUY"
+            sl = price - 14
+            tp1 = price + 10
+            tp2 = price + 22
+            trend = f"Price ${price:.1f} Pivot ${pivot:.1f} se upar - BUY"
+        else:
+            # Sideways me bhi EMA se force SELL/BUY
+            signal = "SELL" if price < open_p else "BUY"
+            sl = price + 12 if signal=="SELL" else price - 12
+            tp1 = price - 10 if signal=="SELL" else price + 10
+            tp2 = price - 20 if signal=="SELL" else price + 20
+            trend = f"Sideways but Open ${open_p:.1f} se {'niche' if signal=='SELL' else 'upar'} - {signal}"
 
-    ema9 = price - 2 if signal=="BUY" else price + 2 if signal=="SELL" else price
-    ema21 = price - 5 if signal=="BUY" else price + 5 if signal=="SELL" else price
-    
-    return {"price": price, "rsi": rsi, "ema9": ema9, "ema21": ema21, "pivot": pivot, "signal": signal, "sl": sl, "tp1": tp1, "tp2": tp2, "trend_text": trend}
+    return {"price":price,"rsi":rsi,"ema9":ema9,"ema21":ema21,"pivot":pivot,"signal":signal,"sl":sl,"tp1":tp1,"tp2":tp2,"trend_text":trend}
 
 def format_signal(d):
     if not d: return "Data nahi mila"
-    icon = "🚀 BUY" if d['signal']=="BUY" else "🔻 SELL" if d['signal']=="SELL" else "⏳ WAIT"
+    icon = "🔻 SELL" if d['signal']=="SELL" else "🚀 BUY" if d['signal']=="BUY" else "⏳ WAIT"
     return f"{icon} SIGNAL\n\n💰 Price: ${d['price']:.2f}\n📊 RSI: {d['rsi']:.1f}\n📈 EMA9: {d['ema9']:.1f} | EMA21: {d['ema21']:.1f}\n⚖️ Pivot: {d['pivot']:.1f}\n\n🎯 SL: ${d['sl']:.1f}\n✅ TP1: ${d['tp1']:.1f}\n✅ TP2: ${d['tp2']:.1f}\n\n📝 {d['trend_text']}"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot LIVE ✅ /gold likho")
 async def gold(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Live Gold check kar raha hu...")
-    await update.message.reply_text(format_signal(get_gold_analysis()))
+    await update.message.reply_text(format_signal(get_analysis()))
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
