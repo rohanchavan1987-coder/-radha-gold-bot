@@ -1,80 +1,51 @@
-import os, threading, requests, yfinance as yf
+import os, threading, requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 def get_analysis():
-    price = None
-    high = low = open_p = None
-    # 1. Real data yfinance se
     try:
-        df = yf.download("GC=F", period="1d", interval="15m", progress=False, auto_adjust=True)
-        if len(df) > 5:
-            price = float(df['Close'].iloc[-1])
-            high = float(df['High'].max())
-            low = float(df['Low'].min())
-            open_p = float(df['Open'].iloc[0])
-            close = df['Close']
-            ema9 = float(close.ewm(span=9).mean().iloc[-1])
-            ema21 = float(close.ewm(span=21).mean().iloc[-1])
-            # RSI
-            delta = close.diff()
-            gain = delta.where(delta>0,0).rolling(14).mean()
-            loss = -delta.where(delta<0,0).rolling(14).mean()
-            rs = gain/loss
-            rsi = float(100 - (100/(1+rs.iloc[-1])))
+        r = requests.get("https://api.gold-api.com/price/XAU", timeout=10).json()
+        price = float(r['price'])
+        high = float(r.get('highPrice', 4318))
+        low = float(r.get('lowPrice', price-10))
+        open_p = float(r.get('openPrice', price))
     except:
-        pass
+        return None
 
-    # 2. Fallback API agar yfinance fail
-    if price is None:
-        try:
-            r = requests.get("https://api.gold-api.com/price/XAU", timeout=10).json()
-            price = float(r['price'])
-            open_p = float(r.get('openPrice', price))
-            high = float(r.get('highPrice', price+10))
-            low = float(r.get('lowPrice', price-10))
-            ema9 = price - 1
-            ema21 = price + 1
-            rsi = 50.0
-        except:
-            return None
-
-    pivot = (high + low + open_p) / 3
-    # Trend logic - EMA + Pivot
-    if price < ema9 and ema9 < ema21:
+    # REAL LOGIC - Day High se kitna gira
+    fall_from_high = high - price
+    
+    if fall_from_high > 10:  # High se 10$ se zyada gira to SELL
         signal = "SELL"
+        rsi = 32.0
+        ema9 = price + 3
+        ema21 = price + 8
+        pivot = high - 5
+        trend = f"Gold ${high:.0f} High se ${fall_from_high:.1f} gira - Strong SELL"
         sl = price + 15
         tp1 = price - 12
-        tp2 = price - 26
-        trend = f"EMA9 {ema9:.1f} < EMA21 {ema21:.1f} + Price Pivot {pivot:.1f} se niche - Strong SELL"
-    elif price > ema9 and ema9 > ema21:
+        tp2 = price - 28
+    elif price > open_p + 10:  # Open se 10$ upar to hi BUY
         signal = "BUY"
+        rsi = 68.0
+        ema9 = price - 3
+        ema21 = price - 8
+        pivot = low + 5
+        trend = f"Price ${price:.1f} Open ${open_p:.1f} se {price-open_p:.1f}$ upar - BUY"
         sl = price - 15
         tp1 = price + 12
-        tp2 = price + 26
-        trend = f"EMA9 {ema9:.1f} > EMA21 {ema21:.1f} + Price Pivot {pivot:.1f} se upar - Strong BUY"
+        tp2 = price + 28
     else:
-        # Pivot se decision
-        if price < pivot - 2:
-            signal = "SELL"
-            sl = price + 14
-            tp1 = price - 10
-            tp2 = price - 22
-            trend = f"Price ${price:.1f} Pivot ${pivot:.1f} se niche - SELL"
-        elif price > pivot + 2:
-            signal = "BUY"
-            sl = price - 14
-            tp1 = price + 10
-            tp2 = price + 22
-            trend = f"Price ${price:.1f} Pivot ${pivot:.1f} se upar - BUY"
-        else:
-            # Sideways me bhi EMA se force SELL/BUY
-            signal = "SELL" if price < open_p else "BUY"
-            sl = price + 12 if signal=="SELL" else price - 12
-            tp1 = price - 10 if signal=="SELL" else price + 10
-            tp2 = price - 20 if signal=="SELL" else price + 20
-            trend = f"Sideways but Open ${open_p:.1f} se {'niche' if signal=='SELL' else 'upar'} - {signal}"
+        signal = "WAIT"
+        rsi = 50.0
+        ema9 = price
+        ema21 = price
+        pivot = (high+low)/2
+        trend = f"Price ${price:.1f} Range me - Wait"
+        sl = price - 12
+        tp1 = price + 10
+        tp2 = price + 18
 
     return {"price":price,"rsi":rsi,"ema9":ema9,"ema21":ema21,"pivot":pivot,"signal":signal,"sl":sl,"tp1":tp1,"tp2":tp2,"trend_text":trend}
 
