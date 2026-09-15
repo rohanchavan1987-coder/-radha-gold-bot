@@ -27,3 +27,4 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("gold", gold))
     print("Bot started...")
     app.run_polling()
+    
