@@ -1,7 +1,7 @@
 import os, time, requests, yfinance as yf
 
-BOT_TOKEN =os.getnv("8924651615:AAHgJ73W9_ZWvHl9MZOc3PJVy1lhD7os9U8")
-CHAT_ID = os.getenv("8924651615")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 def send_telegram(message):
     try:
