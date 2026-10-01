@@ -1,5 +1,4 @@
 import os, time, requests
-import yfinance as yf
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -8,39 +7,42 @@ def send_telegram(msg):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
-        print("Telegram Sent")
+        print("Sent to Telegram")
     except Exception as e:
-        print(e)
+        print(f"Telegram Error: {e}")
 
 def get_gold_data():
-    # PAXG is Gold Token - same price as XAUUSD, but works on Render
-    try:
-        df = yf.download("PAXG-USD", period="2d", interval="5m", progress=False, auto_adjust=True)
-        price = float(df['Close'].iloc[-1])
-        high_4h = float(df['High'].iloc[-48:].max()) # Last 48 candles = 4 Hour
-        low_4h = float(df['Low'].iloc[-48:].min())
-        print(f"Price OK: {price} H:{high_4h} L:{low_4h}")
-        return price, high_4h, low_4h
-    except Exception as e:
-        print(f"yfinance failed: {e}")
-        # Fallback API
-        r = requests.get("https://api.gold-api.com/price/XAUUSD", timeout=10).json()
-        price = float(r['price'])
-        return price, price+2, price-2
+    # Binance PAXG = Real Gold Price, works on Render
+    url = "https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=5m&limit=50"
+    data = requests.get(url, timeout=10).json()
 
-print("✅ Gold Bot Started - PAXG Version")
-send_telegram("🟢 *Gold Bot LIVE*\nPair: XAUUSD (PAXG)\nTF: 5 Min\nStatus: Started ✅")
+    closes = [float(c[4]) for c in data] # Close price
+    highs = [float(c[2]) for c in data] # High price
+    lows = [float(c[3]) for c in data] # Low price
+
+    price = closes[-1]
+    # Last 48 candles = 4 hours (5min * 48 = 240min)
+    high_4h = max(highs[-49:-1])
+    low_4h = min(lows[-49:-1])
+
+    print(f"Gold Price: {price} High4H: {high_4h} Low4H: {low_4h}")
+    return price, high_4h, low_4h
+
+print("✅ Gold Bot Started - Binance PAXG")
+send_telegram("🟢 *Gold Bot LIVE*\nPair: XAUUSD (PAXG)\nTF: 5 Min\nSource: Binance\nStatus: Running ✅")
 
 while True:
     try:
         price, high, low = get_gold_data()
-        print(f"CHECK Price:{price:.2f} High:{high:.2f} Low:{low:.2f}")
+
         if price > high:
-            send_telegram(f"🟢 *XAUUSD BUY*\nPrice: `{price:.2f}`\nBreakout: 4H High\nTF: 5Min")
+            send_telegram(f"🟢 *XAUUSD BUY SIGNAL*\nPrice: `{price:.2f}`\nLogic: 4H High Breakout `{high:.2f}`\nTF: 5 Min")
             time.sleep(600)
         elif price < low:
-            send_telegram(f"🔴 *XAUUSD SELL*\nPrice: `{price:.2f}`\nBreakdown: 4H Low\nTF: 5Min")
+            send_telegram(f"🔴 *XAUUSD SELL SIGNAL*\nPrice: `{price:.2f}`\nLogic: 4H Low Breakdown `{low:.2f}`\nTF: 5 Min")
             time.sleep(600)
+
     except Exception as e:
-        print(f"Loop Error: {e}")
-    time.sleep(300)
+        print(f"Error: {e}")
+
+    time.sleep(300) # 5 min check
