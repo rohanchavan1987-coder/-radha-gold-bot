@@ -2,8 +2,8 @@ import time
 import requests
 import yfinance as yf
 
-BOT_TOKEN = "8924651516:AAHgJ73W9_ZWvHl9MZOc3PJVy1lhD7os9U8"
-CHAT_ID = "8924651516"
+BOT_TOKEN = "8924651615:AAHgJ73W9_ZWvHl9MZOc3PJVy1lhD7os9U8"
+CHAT_ID = "8924651615"
 
 def send_telegram(message):
     try:
