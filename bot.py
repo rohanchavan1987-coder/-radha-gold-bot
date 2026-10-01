@@ -1,48 +1,53 @@
 import os, time, requests
+from flask import Flask
+from threading import Thread
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+
+app = Flask(__name__)
+@app.route('/')
+def home():
+    return "Gold Bot is Running"
 
 def send_telegram(msg):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
-        print("Sent to Telegram")
+        print("Telegram sent")
     except Exception as e:
-        print(f"Telegram Error: {e}")
+        print(e)
 
-def get_gold_data():
-    # Binance PAXG = Real Gold Price, works on Render
+def get_gold():
     url = "https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=5m&limit=50"
     data = requests.get(url, timeout=10).json()
-
-    closes = [float(c[4]) for c in data] # Close price
-    highs = [float(c[2]) for c in data] # High price
-    lows = [float(c[3]) for c in data] # Low price
-
+    closes = [float(c[4]) for c in data]
+    highs = [float(c[2]) for c in data]
+    lows = [float(c[3]) for c in data]
     price = closes[-1]
-    # Last 48 candles = 4 hours (5min * 48 = 240min)
     high_4h = max(highs[-49:-1])
     low_4h = min(lows[-49:-1])
-
-    print(f"Gold Price: {price} High4H: {high_4h} Low4H: {low_4h}")
     return price, high_4h, low_4h
 
-print("✅ Gold Bot Started - Binance PAXG")
-send_telegram("🟢 *Gold Bot LIVE*\nPair: XAUUSD (PAXG)\nTF: 5 Min\nSource: Binance\nStatus: Running ✅")
+def run_bot():
+    print("✅ Gold Bot Started")
+    send_telegram("🟢 *Gold Bot LIVE*\nPair: XAUUSD\nTF: 5 Min\nStatus: Started ✅")
+    while True:
+        try:
+            price, high, low = get_gold()
+            print(f"Price: {price} H:{high} L:{low}")
+            if price > high:
+                send_telegram(f"🟢 *XAUUSD BUY*\nPrice: `{price:.2f}`\nBreakout 4H High")
+                time.sleep(600)
+            elif price < low:
+                send_telegram(f"🔴 *XAUUSD SELL*\nPrice: `{price:.2f}`\nBreakdown 4H Low")
+                time.sleep(600)
+        except Exception as e:
+            print(f"Error: {e}")
+        time.sleep(300)
 
-while True:
-    try:
-        price, high, low = get_gold_data()
+Thread(target=run_bot, daemon=True).start()
 
-        if price > high:
-            send_telegram(f"🟢 *XAUUSD BUY SIGNAL*\nPrice: `{price:.2f}`\nLogic: 4H High Breakout `{high:.2f}`\nTF: 5 Min")
-            time.sleep(600)
-        elif price < low:
-            send_telegram(f"🔴 *XAUUSD SELL SIGNAL*\nPrice: `{price:.2f}`\nLogic: 4H Low Breakdown `{low:.2f}`\nTF: 5 Min")
-            time.sleep(600)
-
-    except Exception as e:
-        print(f"Error: {e}")
-
-    time.sleep(300) # 5 min check
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
