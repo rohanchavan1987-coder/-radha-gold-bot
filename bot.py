@@ -45,10 +45,17 @@ def make_signal():
     else:
         rsi, ema9, ema21, pivot = 52.0, live-3, live+3, live+10
 
-    if live < ema9:
-        sig, sl, tp1, tp2, note = "🔻 SELL SIGNAL", live+15, live-12, live-28, "Gold High se gira - Strong SELL"
+    # --- FINAL FIXED LOGIC ---
+    if rsi < 32:
+        sig, sl, tp1, tp2, note = "🟢 BUY SIGNAL - Oversold Bounce", live-15, live+12, live+28, f"Gold Support {pivot:.1f} pe hai, RSI {rsi:.1f} Oversold - Strong BUY Bounce"
+    elif rsi > 68:
+        sig, sl, tp1, tp2, note = "🔻 SELL SIGNAL - Overbought", live+15, live-12, live-28, f"Gold Resistance pe hai, RSI {rsi:.1f} Overbought - Strong SELL"
+    elif live < ema9 and live < ema21 and rsi < 55:
+        sig, sl, tp1, tp2, note = "🔻 SELL SIGNAL", live+15, live-12, live-28, "Gold Downtrend me hai - Weak SELL"
+    elif live > ema9 and live > ema21 and rsi > 45:
+        sig, sl, tp1, tp2, note = "🟢 BUY SIGNAL", live-15, live+12, live+28, "Gold Uptrend me hai - Strong BUY"
     else:
-        sig, sl, tp1, tp2, note = "🟢 BUY SIGNAL", live-15, live+12, live+28, "Gold Low se utha - Strong BUY"
+        sig, sl, tp1, tp2, note = "⚠️ WAIT / SIDEWAYS", live+12, live-10, live+18, f"Gold {pivot:.1f} Pivot ke paas confuse hai, RSI {rsi:.1f} - No Trade Zone"
 
     return f"""{sig}
 Live 2 Oct
@@ -82,5 +89,5 @@ def poll():
 threading.Thread(target=poll, daemon=True).start()
 app=Flask(__name__)
 @app.route('/')
-def home(): return "Bot Running Live 4170+"
+def home(): return "Bot Running Live Final - BUY/SELL Both"
 app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
